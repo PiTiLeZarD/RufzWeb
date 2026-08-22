@@ -418,3 +418,33 @@ footer p + p {
 .kofi:focus-visible {
   border-bottom-color: var(--accent);
 }
+
+.source-link {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-decoration: none;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.source-link:hover,
+.source-link:focus-visible {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+
+@media (max-width: 600px) {
+  .source-link span {
+    display: none;
+  }
+}
