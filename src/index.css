@@ -396,3 +396,25 @@ footer {
   border-top: 1px solid var(--line);
   padding-top: 1rem;
 }
+
+footer p {
+  margin: 0;
+}
+
+footer p + p {
+  margin-top: 0.5rem;
+}
+
+.kofi {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+.kofi:hover,
+.kofi:focus-visible {
+  border-bottom-color: var(--accent);
+}

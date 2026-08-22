@@ -85,9 +85,22 @@ export default function App() {
       )}
 
       <footer>
-        Scoring follows the shape of the published RufzXP formula (quadratic in speed,
-        linear in call length, divided by (errors+1)²) but the constants are ours —
-        scores are not comparable with RufzXP.
+        <p>
+          Scoring follows the shape of the published RufzXP formula (quadratic in speed,
+          linear in call length, divided by (errors+1)²) but the constants are ours —
+          scores are not comparable with RufzXP.
+        </p>
+        <p>
+          Free and ad-free.{' '}
+          <a
+            className="kofi"
+            href="https://ko-fi.com/pitilezard"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <span aria-hidden="true">☕</span> Buy me a coffee on Ko-fi
+          </a>
+        </p>
       </footer>
     </div>
   );
