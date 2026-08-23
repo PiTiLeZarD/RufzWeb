@@ -43,6 +43,18 @@ header h1 {
   font-weight: 700;
 }
 
+header h1 .home-link {
+  all: unset;
+  cursor: pointer;
+  display: inline-block;
+}
+
+header h1 .home-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
 header h1 span {
   color: var(--accent);
 }

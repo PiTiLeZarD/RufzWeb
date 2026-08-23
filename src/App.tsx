@@ -88,6 +88,13 @@ export default function App() {
     void start();
   };
 
+  /** The title is the way back to the setup screen from anywhere in the app. */
+  const goHome = () => {
+    clearShare();
+    closeSession();
+    abort();
+  };
+
   const testTone = async () => {
     await engine.unlock();
     engine.send('VVV TEST', settings.startCpm, settings.tone);
@@ -97,7 +104,9 @@ export default function App() {
     <div className="app">
       <header>
         <h1>
-          Rufz<span>Web</span>
+          <button type="button" className="home-link" onClick={goHome}>
+            Rufz<span>Web</span>
+          </button>
         </h1>
         <p>Adaptive callsign copying trainer. Web Audio, no install.</p>
       </header>
