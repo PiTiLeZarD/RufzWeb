@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { dotSeconds, lengthInDots, toDotUnits } from './morse';
 import { countErrors, nextSpeed, scoreCall, DEFAULT_SPEED_RULE } from './scoring';
 import { drawCalls, generatePool, parseCallsignFile } from './callsigns';
+import { decodeRun, encodeRun, readSharePayload } from './share';
+import type { Attempt } from '../hooks/useRufzRun';
 
 describe('morse timing', () => {
   it('renders PARIS as 50 dot units per word', () => {
@@ -127,5 +129,58 @@ describe('callsigns', () => {
   it('parses MASTER.PED style lines and ignores junk', () => {
     const parsed = parseCallsignFile('DL4MM,14\nG3ABC\n\n# comment\nVK3XYZ,30\n');
     expect(parsed).toEqual(['DL4MM', 'G3ABC', 'VK3XYZ']);
+  });
+});
+
+describe('share links', () => {
+  const attempt = (
+    sent: string,
+    typed: string,
+    cpm: number,
+    elapsedSeconds: number,
+    repeated = false,
+  ): Attempt => ({
+    index: 0,
+    sent,
+    typed,
+    cpm,
+    elapsedSeconds,
+    repeated,
+    score: scoreCall({ cpm, sent, typed, elapsedSeconds, repeated }),
+  });
+
+  const run: Attempt[] = [
+    attempt('DL4MM', 'DL4MM', 100, 2.4),
+    attempt('VK3XYZ', 'VK3XZ', 106, 5.1, true),
+    attempt('9A1CRA', '', 94, 8.7),
+  ].map((a, index) => ({ ...a, index }));
+
+  it('round-trips a run through the payload', async () => {
+    const decoded = await decodeRun(await encodeRun(run, 1_700_000_000_000));
+    expect(decoded?.timestamp).toBe(1_700_000_000_000);
+    expect(decoded?.attempts).toEqual(run);
+    expect(decoded?.totalPoints).toBe(run.reduce((sum, a) => sum + a.score.points, 0));
+  });
+
+  it('keeps a 50-call link short enough to paste anywhere', async () => {
+    const long = Array.from({ length: 50 }, (_, index) => ({
+      ...attempt('OH2XYZ', 'OH2XYZ', 120 + index, 3.3),
+      index,
+    }));
+    expect((await encodeRun(long)).length).toBeLessThan(1000);
+  });
+
+  it('rejects a payload that was mangled in transit', async () => {
+    const payload = await encodeRun(run);
+    expect(await decodeRun(payload.slice(0, payload.length - 8))).toBeNull();
+    expect(await decodeRun('D' + 'nonsense')).toBeNull();
+    expect(await decodeRun('')).toBeNull();
+  });
+
+  it('reads the payload out of a hash and ignores anything else', () => {
+    expect(readSharePayload('#r=abc')).toBe('abc');
+    expect(readSharePayload('r=abc')).toBe('abc');
+    expect(readSharePayload('#')).toBeNull();
+    expect(readSharePayload('#other=1')).toBeNull();
   });
 });

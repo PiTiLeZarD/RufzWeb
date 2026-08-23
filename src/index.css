@@ -149,6 +149,7 @@ input[type='range'] {
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
   margin-top: 1.25rem;
 }
@@ -447,4 +448,33 @@ footer p + p {
   .source-link span {
     display: none;
   }
+}
+
+.shared-note {
+  margin: -0.25rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.share-error {
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.8rem;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--bad);
+  border-radius: 6px;
+}
+
+.share-fallback {
+  flex: 1 1 100%;
+  min-width: 0;
+  padding: 0.4rem 0.6rem;
+  font-family: inherit;
+  font-size: 0.75rem;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
 }

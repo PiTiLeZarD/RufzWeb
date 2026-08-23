@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { cpmToWpm } from '../game/morse';
+import { buildShareUrl, encodeRun } from '../game/share';
 import type { Attempt } from '../hooks/useRufzRun';
 
 interface Props {
@@ -6,9 +8,20 @@ interface Props {
   totalPoints: number;
   onRestart: () => void;
   onSetup: () => void;
+  /** Rendered from a share link rather than from a run just finished here. */
+  shared?: boolean;
+  /** When the shared link was made. */
+  sharedAt?: number;
 }
 
-export function ResultsPanel({ attempts, totalPoints, onRestart, onSetup }: Props) {
+export function ResultsPanel({
+  attempts,
+  totalPoints,
+  onRestart,
+  onSetup,
+  shared = false,
+  sharedAt,
+}: Props) {
   const correct = attempts.filter((a) => a.score.correct).length;
   const maxCpm = Math.max(...attempts.map((a) => a.cpm));
   const finalCpm = attempts[attempts.length - 1]?.cpm ?? 0;
@@ -16,7 +29,14 @@ export function ResultsPanel({ attempts, totalPoints, onRestart, onSetup }: Prop
 
   return (
     <section className="panel">
-      <h2>Run complete</h2>
+      <h2>{shared ? 'Shared run' : 'Run complete'}</h2>
+      {shared && (
+        <p className="shared-note">
+          Someone sent you their result
+          {sharedAt ? ` from ${new Date(sharedAt).toLocaleDateString()}` : ''}. Nothing here
+          touches your own scores.
+        </p>
+      )}
 
       <div className="result-summary">
         <div className="score-big">{totalPoints.toLocaleString()}</div>
@@ -80,14 +100,62 @@ export function ResultsPanel({ attempts, totalPoints, onRestart, onSetup }: Prop
       </div>
 
       <div className="actions">
-        <button type="button" className="primary" onClick={onRestart}>
-          Run again
-        </button>
-        <button type="button" className="ghost" onClick={onSetup}>
-          Setup
-        </button>
+        {shared ? (
+          <button type="button" className="primary" onClick={onSetup}>
+            Try it yourself
+          </button>
+        ) : (
+          <>
+            <button type="button" className="primary" onClick={onRestart}>
+              Run again
+            </button>
+            <button type="button" className="ghost" onClick={onSetup}>
+              Setup
+            </button>
+            <ShareButton attempts={attempts} />
+          </>
+        )}
       </div>
     </section>
+  );
+}
+
+/**
+ * The whole run is packed into the link, so a share needs no server and no
+ * account. Clipboard writes are blocked in some contexts, so a failure falls
+ * back to showing the URL for manual copying.
+ */
+function ShareButton({ attempts }: { attempts: Attempt[] }) {
+  const [copied, setCopied] = useState(false);
+  const [fallbackUrl, setFallbackUrl] = useState('');
+
+  const share = async () => {
+    const url = buildShareUrl(await encodeRun(attempts));
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setFallbackUrl('');
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setFallbackUrl(url);
+    }
+  };
+
+  return (
+    <>
+      <button type="button" className="ghost" onClick={() => void share()}>
+        {copied ? 'Link copied' : 'Copy share link'}
+      </button>
+      {fallbackUrl && (
+        <input
+          className="share-fallback"
+          readOnly
+          value={fallbackUrl}
+          onFocus={(e) => e.currentTarget.select()}
+          aria-label="Share link"
+        />
+      )}
+    </>
   );
 }
 

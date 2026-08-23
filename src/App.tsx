@@ -5,6 +5,7 @@ import { ScoreList } from './components/ScoreList';
 import { SetupPanel } from './components/SetupPanel';
 import { generatePool } from './game/callsigns';
 import { loadSettings, saveSettings, type RufzSettings } from './game/settings';
+import { decodeRun, readSharePayload, type SharedRun } from './game/share';
 import { useRufzRun } from './hooks/useRufzRun';
 
 const GENERATED_POOL_SIZE = 8000;
@@ -15,6 +16,8 @@ export default function App() {
   const [settings, setSettings] = useState<RufzSettings>(() => loadSettings());
   const [pool, setPool] = useState<string[] | null>(null);
   const [poolLabel, setPoolLabel] = useState(GENERATED_LABEL);
+  const [shared, setShared] = useState<SharedRun | null>(null);
+  const [shareBroken, setShareBroken] = useState(false);
 
   const generated = useMemo(
     () => generatePool(GENERATED_POOL_SIZE, GENERATED_POOL_SEED),
@@ -23,6 +26,39 @@ export default function App() {
   const activePool = pool ?? generated;
 
   useEffect(() => saveSettings(settings), [settings]);
+
+  // A share link is just the hash, so it also has to be picked up on
+  // navigation within the page (back button, pasting a second link).
+  useEffect(() => {
+    let live = true;
+
+    const read = () => {
+      const payload = readSharePayload(window.location.hash);
+      if (!payload) {
+        setShared(null);
+        setShareBroken(false);
+        return;
+      }
+      void decodeRun(payload).then((run) => {
+        if (!live) return;
+        setShared(run);
+        setShareBroken(run === null);
+      });
+    };
+
+    read();
+    window.addEventListener('hashchange', read);
+    return () => {
+      live = false;
+      window.removeEventListener('hashchange', read);
+    };
+  }, []);
+
+  const clearShare = () => {
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    setShared(null);
+    setShareBroken(false);
+  };
 
   const { state, scores, start, submit, repeat, abort, engine } = useRufzRun(
     settings,
@@ -43,7 +79,24 @@ export default function App() {
         <p>Adaptive callsign copying trainer. Web Audio, no install.</p>
       </header>
 
-      {state.phase === 'idle' && (
+      {shareBroken && (
+        <p className="share-error">
+          That share link could not be read — it may have been truncated in transit.
+        </p>
+      )}
+
+      {shared && (
+        <ResultsPanel
+          attempts={shared.attempts}
+          totalPoints={shared.totalPoints}
+          shared
+          sharedAt={shared.timestamp}
+          onRestart={clearShare}
+          onSetup={clearShare}
+        />
+      )}
+
+      {!shared && state.phase === 'idle' && (
         <>
           <SetupPanel
             settings={settings}
@@ -65,7 +118,7 @@ export default function App() {
         </>
       )}
 
-      {(state.phase === 'sending' || state.phase === 'copying') && (
+      {!shared && (state.phase === 'sending' || state.phase === 'copying') && (
         <RunPanel
           state={state}
           settings={settings}
@@ -75,7 +128,7 @@ export default function App() {
         />
       )}
 
-      {state.phase === 'finished' && (
+      {!shared && state.phase === 'finished' && (
         <ResultsPanel
           attempts={state.attempts}
           totalPoints={state.totalPoints}
