@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CwEngine } from '../audio/cwEngine';
 import { drawCalls } from '../game/callsigns';
 import { nextSpeed, scoreCall, type ScoreResult } from '../game/scoring';
-import { loadScores, saveScore, type RufzSettings, type StoredScore } from '../game/settings';
+import { addSession, loadHistory, newSessionId, type SessionRecord } from '../game/history';
+import { encodeRun } from '../game/share';
+import type { RufzSettings } from '../game/settings';
 
 export type RunPhase = 'idle' | 'sending' | 'copying' | 'finished';
 
@@ -42,11 +44,10 @@ const INITIAL: RunState = {
 export function useRufzRun(settings: RufzSettings, pool: string[]) {
   const engine = useMemo(() => new CwEngine(), []);
   const [state, setState] = useState<RunState>(INITIAL);
-  const [scores, setScores] = useState<StoredScore[]>(() => loadScores());
+  const [history, setHistory] = useState<SessionRecord[]>(() => loadHistory());
 
   const stateRef = useRef<RunState>(INITIAL);
   const callsRef = useRef<string[]>([]);
-  const seedRef = useRef(0);
   const txEndRef = useRef(0);
   /** Bumped on start/abort so a stale transmission cannot resume a dead run. */
   const runIdRef = useRef(0);
@@ -80,7 +81,6 @@ export function useRufzRun(settings: RufzSettings, pool: string[]) {
     const seed = Date.now() >>> 0;
     const runId = runIdRef.current + 1;
     runIdRef.current = runId;
-    seedRef.current = seed;
     callsRef.current = drawCalls(pool, current.callCount, seed);
 
     commit({
@@ -142,18 +142,27 @@ export function useRufzRun(settings: RufzSettings, pool: string[]) {
       if (index >= current.callCount) {
         runIdRef.current += 1;
         commit({ ...prev, phase: 'finished', attempts, totalPoints });
-        setScores(
-          saveScore({
-            timestamp: Date.now(),
-            totalPoints,
-            callCount: current.callCount,
-            startCpm: current.startCpm,
-            maxCpm: Math.max(...attempts.map((a) => a.cpm)),
-            finalCpm: prev.cpm,
-            correct: attempts.filter((a) => a.score.correct).length,
-            seed: seedRef.current,
-          }),
-        );
+
+        // The run is stored with its share payload so the session can be
+        // reopened later. Encoding is async, so the record is written once the
+        // payload is in hand rather than in two passes.
+        const timestamp = Date.now();
+        void (async () => {
+          const payload = await encodeRun(attempts, timestamp).catch(() => undefined);
+          setHistory(
+            addSession({
+              id: newSessionId(timestamp),
+              timestamp,
+              totalPoints,
+              callCount: current.callCount,
+              startCpm: current.startCpm,
+              maxCpm: Math.max(...attempts.map((a) => a.cpm)),
+              finalCpm: prev.cpm,
+              correct: attempts.filter((a) => a.score.correct).length,
+              payload,
+            }),
+          );
+        })();
         return;
       }
 
@@ -174,5 +183,5 @@ export function useRufzRun(settings: RufzSettings, pool: string[]) {
     [commit, transmit],
   );
 
-  return { state, scores, start, submit, repeat, abort, engine };
+  return { state, history, setHistory, start, submit, repeat, abort, engine };
 }

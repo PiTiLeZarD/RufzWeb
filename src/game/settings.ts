@@ -24,7 +24,6 @@ export const DEFAULT_SETTINGS: RufzSettings = {
 };
 
 const SETTINGS_KEY = 'rufzweb.settings.v1';
-const SCORES_KEY = 'rufzweb.scores.v1';
 
 export function loadSettings(): RufzSettings {
   try {
@@ -48,36 +47,4 @@ export function saveSettings(settings: RufzSettings): void {
   } catch {
     // Storage unavailable (private mode); settings simply won't persist.
   }
-}
-
-export interface StoredScore {
-  timestamp: number;
-  totalPoints: number;
-  callCount: number;
-  startCpm: number;
-  maxCpm: number;
-  finalCpm: number;
-  correct: number;
-  seed: number;
-}
-
-export function loadScores(): StoredScore[] {
-  try {
-    const raw = localStorage.getItem(SCORES_KEY);
-    return raw ? (JSON.parse(raw) as StoredScore[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-export function saveScore(score: StoredScore): StoredScore[] {
-  const scores = [...loadScores(), score]
-    .sort((a, b) => b.totalPoints - a.totalPoints)
-    .slice(0, 50);
-  try {
-    localStorage.setItem(SCORES_KEY, JSON.stringify(scores));
-  } catch {
-    // Ignore; the in-memory list is still returned.
-  }
-  return scores;
 }

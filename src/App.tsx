@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { RunPanel } from './components/RunPanel';
 import { ResultsPanel } from './components/ResultsPanel';
-import { ScoreList } from './components/ScoreList';
+import { HistoryPanel } from './components/HistoryPanel';
 import { SetupPanel } from './components/SetupPanel';
 import { generatePool } from './game/callsigns';
+import { clearHistory, deleteSession, type SessionRecord } from './game/history';
 import { loadSettings, saveSettings, type RufzSettings } from './game/settings';
 import { decodeRun, readSharePayload, type SharedRun } from './game/share';
 import { useRufzRun } from './hooks/useRufzRun';
@@ -18,6 +19,10 @@ export default function App() {
   const [poolLabel, setPoolLabel] = useState(GENERATED_LABEL);
   const [shared, setShared] = useState<SharedRun | null>(null);
   const [shareBroken, setShareBroken] = useState(false);
+  const [viewed, setViewed] = useState<{ record: SessionRecord; run: SharedRun } | null>(
+    null,
+  );
+  const [viewBroken, setViewBroken] = useState(false);
 
   const generated = useMemo(
     () => generatePool(GENERATED_POOL_SIZE, GENERATED_POOL_SEED),
@@ -60,10 +65,28 @@ export default function App() {
     setShareBroken(false);
   };
 
-  const { state, scores, start, submit, repeat, abort, engine } = useRufzRun(
+  const { state, history: sessions, setHistory, start, submit, repeat, abort, engine } = useRufzRun(
     settings,
     activePool,
   );
+
+  const openSession = async (record: SessionRecord) => {
+    if (!record.payload) return;
+    const run = await decodeRun(record.payload);
+    setViewed(run ? { record, run } : null);
+    setViewBroken(run === null);
+  };
+
+  const closeSession = () => {
+    setViewed(null);
+    setViewBroken(false);
+  };
+
+  /** Starting a run always leaves whatever stored session was on screen. */
+  const beginRun = () => {
+    closeSession();
+    void start();
+  };
 
   const testTone = async () => {
     await engine.unlock();
@@ -89,14 +112,26 @@ export default function App() {
         <ResultsPanel
           attempts={shared.attempts}
           totalPoints={shared.totalPoints}
-          shared
-          sharedAt={shared.timestamp}
+          source="shared"
+          timestamp={shared.timestamp}
           onRestart={clearShare}
           onSetup={clearShare}
         />
       )}
 
-      {!shared && state.phase === 'idle' && (
+      {!shared && state.phase === 'idle' && viewed && (
+        <ResultsPanel
+          attempts={viewed.run.attempts}
+          totalPoints={viewed.run.totalPoints}
+          source="history"
+          timestamp={viewed.record.timestamp}
+          payload={viewed.record.payload}
+          onRestart={beginRun}
+          onSetup={closeSession}
+        />
+      )}
+
+      {!shared && state.phase === 'idle' && !viewed && (
         <>
           <SetupPanel
             settings={settings}
@@ -111,10 +146,21 @@ export default function App() {
               setPool(null);
               setPoolLabel(GENERATED_LABEL);
             }}
-            onStart={() => void start()}
+            onStart={beginRun}
             onTestTone={() => void testTone()}
           />
-          <ScoreList scores={scores} />
+          {viewBroken && (
+            <p className="share-error">
+              That stored session could not be read, so it may be from an incompatible
+              version.
+            </p>
+          )}
+          <HistoryPanel
+            history={sessions}
+            onOpen={(session) => void openSession(session)}
+            onDelete={(id) => setHistory(deleteSession(id))}
+            onClear={() => setHistory(clearHistory())}
+          />
         </>
       )}
 
@@ -132,7 +178,7 @@ export default function App() {
         <ResultsPanel
           attempts={state.attempts}
           totalPoints={state.totalPoints}
-          onRestart={() => void start()}
+          onRestart={beginRun}
           onSetup={abort}
         />
       )}

@@ -7,11 +7,17 @@ interface Props {
   attempts: Attempt[];
   totalPoints: number;
   onRestart: () => void;
+  /** Leaves the results: back to setup for a live run, back to history for a stored one. */
   onSetup: () => void;
-  /** Rendered from a share link rather than from a run just finished here. */
-  shared?: boolean;
-  /** When the shared link was made. */
-  sharedAt?: number;
+  /**
+   * Where these results came from: the run just finished here, a share link, or
+   * a session reopened from the local history.
+   */
+  source?: 'live' | 'shared' | 'history';
+  /** When a shared or stored run was recorded. */
+  timestamp?: number;
+  /** Share payload for a stored session, so sharing it needs no re-encoding. */
+  payload?: string;
 }
 
 export function ResultsPanel({
@@ -19,8 +25,9 @@ export function ResultsPanel({
   totalPoints,
   onRestart,
   onSetup,
-  shared = false,
-  sharedAt,
+  source = 'live',
+  timestamp,
+  payload,
 }: Props) {
   const correct = attempts.filter((a) => a.score.correct).length;
   const maxCpm = Math.max(...attempts.map((a) => a.cpm));
@@ -29,13 +36,22 @@ export function ResultsPanel({
 
   return (
     <section className="panel">
-      <h2>{shared ? 'Shared run' : 'Run complete'}</h2>
-      {shared && (
+      <h2>
+        {source === 'shared'
+          ? 'Shared run'
+          : source === 'history'
+            ? 'Past session'
+            : 'Run complete'}
+      </h2>
+      {source === 'shared' && (
         <p className="shared-note">
           Someone sent you their result
-          {sharedAt ? ` from ${new Date(sharedAt).toLocaleDateString()}` : ''}. Nothing here
-          touches your own scores.
+          {timestamp ? ` from ${new Date(timestamp).toLocaleDateString()}` : ''}. Nothing here
+          touches your own history.
         </p>
+      )}
+      {source === 'history' && timestamp && (
+        <p className="shared-note">Run on {new Date(timestamp).toLocaleString()}.</p>
       )}
 
       <div className="result-summary">
@@ -100,11 +116,20 @@ export function ResultsPanel({
       </div>
 
       <div className="actions">
-        {shared ? (
+        {source === 'shared' && (
           <button type="button" className="primary" onClick={onSetup}>
             Try it yourself
           </button>
-        ) : (
+        )}
+        {source === 'history' && (
+          <>
+            <button type="button" className="primary" onClick={onSetup}>
+              Back to history
+            </button>
+            <ShareButton attempts={attempts} payload={payload} />
+          </>
+        )}
+        {source === 'live' && (
           <>
             <button type="button" className="primary" onClick={onRestart}>
               Run again
@@ -125,12 +150,12 @@ export function ResultsPanel({
  * account. Clipboard writes are blocked in some contexts, so a failure falls
  * back to showing the URL for manual copying.
  */
-function ShareButton({ attempts }: { attempts: Attempt[] }) {
+function ShareButton({ attempts, payload }: { attempts: Attempt[]; payload?: string }) {
   const [copied, setCopied] = useState(false);
   const [fallbackUrl, setFallbackUrl] = useState('');
 
   const share = async () => {
-    const url = buildShareUrl(await encodeRun(attempts));
+    const url = buildShareUrl(payload ?? (await encodeRun(attempts)));
     try {
       await navigator.clipboard.writeText(url);
       setCopied(true);
