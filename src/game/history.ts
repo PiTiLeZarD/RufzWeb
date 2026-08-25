@@ -81,6 +81,36 @@ export function inOrder(history: SessionRecord[]): SessionRecord[] {
   return [...history].sort((a, b) => a.timestamp - b.timestamp);
 }
 
+/** Sessions folded into the suggested start speed. */
+const START_WINDOW = 10;
+
+/** Runs shorter than this never settle anywhere worth starting from. */
+const MIN_CALLS_FOR_START = 10;
+
+/**
+ * Where to start the next run, taken from where recent runs actually settled.
+ *
+ * The median of the last few sessions rather than the last one alone: some days
+ * the operator is sharp and some days they are not, and the level worth opening
+ * at is the one in between rather than whichever extreme happened to be most
+ * recent. Each session contributes its final speed, which is a single noisy
+ * call on its own but honest once several are ranked against each other.
+ */
+export function suggestedStartCpm(history: SessionRecord[], fallback: number): number {
+  const recent = sort(history)
+    .filter((e) => e.finalCpm > 0 && e.callCount >= MIN_CALLS_FOR_START)
+    .slice(0, START_WINDOW)
+    .map((e) => e.finalCpm)
+    .sort((a, b) => a - b);
+
+  if (recent.length === 0) return fallback;
+
+  const mid = Math.floor(recent.length / 2);
+  const median =
+    recent.length % 2 === 1 ? recent[mid] : (recent[mid - 1] + recent[mid]) / 2;
+  return Math.round(median);
+}
+
 export function bestSession(history: SessionRecord[]): SessionRecord | null {
   return history.reduce<SessionRecord | null>(
     (best, e) => (best === null || e.totalPoints > best.totalPoints ? e : best),

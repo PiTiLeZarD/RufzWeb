@@ -12,6 +12,8 @@ interface Props {
   onPoolReset: () => void;
   onStart: () => void;
   onTestTone: () => void;
+  /** Where recent runs settled, offered in place of the stored start speed. */
+  suggestedStartCpm: number;
 }
 
 export function SetupPanel({
@@ -23,10 +25,14 @@ export function SetupPanel({
   onPoolReset,
   onStart,
   onTestTone,
+  suggestedStartCpm,
 }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const patch = (fields: Partial<RufzSettings>) => onChange({ ...settings, ...fields });
+
+  const auto = settings.autoStartCpm;
+  const startCpm = auto ? suggestedStartCpm : settings.startCpm;
 
   const handleFile = async (file: File | undefined) => {
     if (!file) return;
@@ -46,10 +52,14 @@ export function SetupPanel({
             min={25}
             max={735}
             step={5}
-            value={settings.startCpm}
+            disabled={auto}
+            value={startCpm}
             onChange={(e) => patch({ startCpm: Number(e.target.value) })}
           />
-          <small>{settings.startCpm} cpm · {cpmToWpm(settings.startCpm).toFixed(0)} wpm</small>
+          <small>
+            {startCpm} cpm · {cpmToWpm(startCpm).toFixed(0)} wpm
+            {auto && ' · from recent runs'}
+          </small>
         </label>
 
         <label>
@@ -129,12 +139,21 @@ export function SetupPanel({
           <small>
             {settings.speedRule.mode === 'fixed'
               ? `${settings.speedRule.stepCpm} cpm per call`
-              : `${Math.round(settings.speedRule.stepFraction * 100)}% of current speed`}
+              : `${Math.round(settings.speedRule.stepFraction * 100)}% of current speed, ` +
+                `narrowing to ${Math.round(settings.speedRule.minStepFraction * 100)}%`}
           </small>
         </label>
       </div>
 
       <div className="toggles">
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={settings.autoStartCpm}
+            onChange={(e) => patch({ autoStartCpm: e.target.checked })}
+          />
+          <span>Start where recent runs settled</span>
+        </label>
         <label className="toggle">
           <input
             type="checkbox"

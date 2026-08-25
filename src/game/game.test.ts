@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { dotSeconds, lengthInDots, toDotUnits } from './morse';
-import { countErrors, nextSpeed, scoreCall, DEFAULT_SPEED_RULE } from './scoring';
+import {
+  countErrors,
+  nextSpeed,
+  scoreCall,
+  DEFAULT_SPEED_RULE,
+  INITIAL_RAMP,
+  type RampInput,
+  type RampState,
+} from './scoring';
+import { suggestedStartCpm, type SessionRecord } from './history';
 import { drawCalls, generatePool, parseCallsignFile } from './callsigns';
 import { decodeRun, encodeRun, readSharePayload } from './share';
 import type { Attempt } from '../hooks/useRufzRun';
@@ -92,40 +101,137 @@ describe('scoring', () => {
 });
 
 describe('speed adaptation', () => {
+  const call = (over: Partial<RampInput> = {}): RampInput => ({
+    errors: 0,
+    repeated: false,
+    elapsedSeconds: 3,
+    length: 5,
+    ...over,
+  });
+
+  const step = (cpm: number, over: Partial<RampInput> = {}, ramp = INITIAL_RAMP) =>
+    nextSpeed(cpm, DEFAULT_SPEED_RULE, call(over), ramp);
+
   it('climbs after a clean copy and drops after a miss', () => {
-    expect(nextSpeed(200, 0, DEFAULT_SPEED_RULE)).toBeGreaterThan(200);
-    expect(nextSpeed(200, 1, DEFAULT_SPEED_RULE)).toBeLessThan(200);
+    expect(step(200).cpm).toBeGreaterThan(200);
+    expect(step(200, { errors: 1 }).cpm).toBeLessThan(200);
   });
 
   it('drops harder the worse the copy', () => {
-    const one = nextSpeed(200, 1, DEFAULT_SPEED_RULE);
-    const three = nextSpeed(200, 3, DEFAULT_SPEED_RULE);
-    expect(three).toBeLessThan(one);
+    expect(step(200, { errors: 3 }).cpm).toBeLessThan(step(200, { errors: 1 }).cpm);
   });
 
   it('respects the speed limits', () => {
-    expect(nextSpeed(735, 0, DEFAULT_SPEED_RULE)).toBe(735);
-    expect(nextSpeed(25, 3, DEFAULT_SPEED_RULE)).toBe(25);
+    expect(step(735).cpm).toBe(735);
+    expect(step(25, { errors: 3 }).cpm).toBe(25);
   });
 
-  it('climbs at half rate when the call needed a repeat', () => {
-    const clean = nextSpeed(200, 0, DEFAULT_SPEED_RULE) - 200;
-    const repeated = nextSpeed(200, 0, DEFAULT_SPEED_RULE, true) - 200;
+  it('climbs less when the call needed a repeat', () => {
+    const clean = step(200).cpm - 200;
+    const repeated = step(200, { repeated: true }).cpm - 200;
     expect(repeated).toBeGreaterThan(0);
-    expect(repeated).toBe(Math.round(clean / 2));
+    expect(repeated).toBeLessThan(clean);
   });
 
-  it('drops the full step even when the call needed a repeat', () => {
-    expect(nextSpeed(200, 1, DEFAULT_SPEED_RULE, true)).toBe(
-      nextSpeed(200, 1, DEFAULT_SPEED_RULE),
+  it('drops the same whether or not the call needed a repeat', () => {
+    expect(step(200, { errors: 1, repeated: true }).cpm).toBe(
+      step(200, { errors: 1 }).cpm,
     );
   });
 
   it('keeps the step proportional at beginner speeds', () => {
     // A 50 cpm start used to jump a flat 5 cpm, a 10% climb per call.
-    const step = nextSpeed(50, 0, DEFAULT_SPEED_RULE) - 50;
-    expect(step).toBe(Math.round(50 * DEFAULT_SPEED_RULE.stepFraction));
-    expect(step).toBeLessThan(5);
+    expect(step(50).cpm - 50).toBeLessThan(5);
+  });
+
+  it('climbs further after a quick copy than a laboured one', () => {
+    // Two calls at the same pace set the baseline, then compare against it.
+    const settled = step(200, { elapsedSeconds: 3 }).ramp;
+    const quick = nextSpeed(200, DEFAULT_SPEED_RULE, call({ elapsedSeconds: 1 }), settled);
+    const laboured = nextSpeed(200, DEFAULT_SPEED_RULE, call({ elapsedSeconds: 9 }), settled);
+    expect(quick.cpm - 200).toBeGreaterThan(laboured.cpm - 200);
+    expect(laboured.cpm).toBeGreaterThan(200);
+  });
+
+  it('judges pace against the operator, not the clock', () => {
+    // A uniformly slow typist ends up at the same weight as a quick one, since
+    // each is measured against their own baseline.
+    const seed = (seconds: number) => {
+      let ramp: RampState = INITIAL_RAMP;
+      for (let i = 0; i < 8; i += 1) {
+        ramp = nextSpeed(
+          200,
+          DEFAULT_SPEED_RULE,
+          call({ elapsedSeconds: seconds }),
+          ramp,
+        ).ramp;
+      }
+      return nextSpeed(200, DEFAULT_SPEED_RULE, call({ elapsedSeconds: seconds }), ramp).cpm;
+    };
+    expect(seed(8)).toBe(seed(2));
+  });
+
+  it('narrows the step once the speed starts reversing', () => {
+    const wide = step(300).cpm - 300;
+    let ramp: RampState = INITIAL_RAMP;
+    // Alternate clean and missed copies to force reversal after reversal.
+    for (let i = 0; i < 12; i += 1) {
+      ramp = nextSpeed(300, DEFAULT_SPEED_RULE, call({ errors: i % 2 }), ramp).ramp;
+    }
+    expect(ramp.reversals).toBeGreaterThan(4);
+    const narrow = nextSpeed(300, DEFAULT_SPEED_RULE, call(), ramp).cpm - 300;
+    expect(narrow).toBeLessThan(wide);
+  });
+
+  it('does not count a move that hit a limit as a reversal', () => {
+    // Pinned at the ceiling a clean copy moves nothing, so the direction it
+    // was travelling in stands rather than reading as a turn downwards.
+    const climbing: RampState = { ...INITIAL_RAMP, lastDir: 1 };
+    const held = nextSpeed(735, DEFAULT_SPEED_RULE, call(), climbing);
+    expect(held.cpm).toBe(735);
+    expect(held.ramp.lastDir).toBe(1);
+    expect(held.ramp.reversals).toBe(0);
+  });
+
+  it('leaves the flat step flat', () => {
+    // Only the proportional step narrows; a mode called fixed stays fixed.
+    const rule = { ...DEFAULT_SPEED_RULE, mode: 'fixed' as const };
+    const worn: RampState = { ...INITIAL_RAMP, reversals: 10, baseSecPerChar: 1, baseSamples: 8 };
+    const fresh: RampState = { ...INITIAL_RAMP, baseSecPerChar: 1, baseSamples: 8 };
+    const quick = call({ elapsedSeconds: 0 });
+    expect(nextSpeed(300, rule, quick, worn).cpm).toBe(
+      nextSpeed(300, rule, quick, fresh).cpm,
+    );
+    // Quick and clean against an established baseline earns the whole step.
+    expect(nextSpeed(300, rule, quick, fresh).cpm - 300).toBe(rule.stepCpm);
+  });
+});
+
+describe('suggested start speed', () => {
+  const session = (finalCpm: number, timestamp: number): SessionRecord => ({
+    id: `s${timestamp}`,
+    timestamp,
+    totalPoints: 0,
+    callCount: 50,
+    correct: 0,
+    startCpm: 100,
+    maxCpm: finalCpm,
+    finalCpm,
+  });
+
+  it('falls back when there is nothing to go on', () => {
+    expect(suggestedStartCpm([], 100)).toBe(100);
+  });
+
+  it('takes the middle of recent runs, not the last one', () => {
+    // A blinding session and a bad one either side of the operator's real level.
+    const history = [session(400, 3), session(200, 2), session(210, 1)];
+    expect(suggestedStartCpm(history, 100)).toBe(210);
+  });
+
+  it('ignores runs too short to settle', () => {
+    const short = { ...session(600, 4), callCount: 5 };
+    expect(suggestedStartCpm([short, session(200, 3), session(210, 2)], 100)).toBe(205);
   });
 });
 

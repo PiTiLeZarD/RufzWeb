@@ -4,7 +4,12 @@ import { ResultsPanel } from './components/ResultsPanel';
 import { HistoryPanel } from './components/HistoryPanel';
 import { SetupPanel } from './components/SetupPanel';
 import { generatePool } from './game/callsigns';
-import { clearHistory, deleteSession, type SessionRecord } from './game/history';
+import {
+  clearHistory,
+  deleteSession,
+  suggestedStartCpm,
+  type SessionRecord,
+} from './game/history';
 import { loadSettings, saveSettings, type RufzSettings } from './game/settings';
 import { decodeRun, readSharePayload, type SharedRun } from './game/share';
 import { useRufzRun } from './hooks/useRufzRun';
@@ -147,6 +152,7 @@ export default function App() {
             onChange={setSettings}
             poolSize={activePool.length}
             poolLabel={poolLabel}
+            suggestedStartCpm={suggestedStartCpm(sessions, settings.startCpm)}
             onPoolImport={(calls, label) => {
               setPool(calls);
               setPoolLabel(label);

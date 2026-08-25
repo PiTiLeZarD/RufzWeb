@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CwEngine } from '../audio/cwEngine';
 import { drawCalls } from '../game/callsigns';
-import { nextSpeed, scoreCall, type ScoreResult } from '../game/scoring';
-import { addSession, loadHistory, newSessionId, type SessionRecord } from '../game/history';
+import { INITIAL_RAMP, nextSpeed, scoreCall, type RampState, type ScoreResult } from '../game/scoring';
+import {
+  addSession,
+  loadHistory,
+  newSessionId,
+  suggestedStartCpm,
+  type SessionRecord,
+} from '../game/history';
 import { encodeRun } from '../game/share';
 import type { RufzSettings } from '../game/settings';
 
@@ -48,12 +54,19 @@ export function useRufzRun(settings: RufzSettings, pool: string[]) {
 
   const stateRef = useRef<RunState>(INITIAL);
   const callsRef = useRef<string[]>([]);
+  /** The ramp's memory for the run in progress; reset on every start. */
+  const rampRef = useRef<RampState>(INITIAL_RAMP);
+  /** Speed the run actually opened at, which may have come from history. */
+  const startCpmRef = useRef(0);
   const txEndRef = useRef(0);
   /** Bumped on start/abort so a stale transmission cannot resume a dead run. */
   const runIdRef = useRef(0);
 
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+
+  const historyRef = useRef(history);
+  historyRef.current = history;
 
   useEffect(() => () => engine.close(), [engine]);
 
@@ -82,17 +95,23 @@ export function useRufzRun(settings: RufzSettings, pool: string[]) {
     const runId = runIdRef.current + 1;
     runIdRef.current = runId;
     callsRef.current = drawCalls(pool, current.callCount, seed);
+    rampRef.current = INITIAL_RAMP;
+
+    const startCpm = current.autoStartCpm
+      ? suggestedStartCpm(historyRef.current, current.startCpm)
+      : current.startCpm;
+    startCpmRef.current = startCpm;
 
     commit({
       phase: 'sending',
       index: 0,
-      cpm: current.startCpm,
+      cpm: startCpm,
       attempts: [],
       totalPoints: 0,
       repeatUsed: false,
     });
 
-    void transmit(callsRef.current[0], current.startCpm, runId);
+    void transmit(callsRef.current[0], startCpm, runId);
   }, [commit, engine, pool, transmit]);
 
   const abort = useCallback(() => {
@@ -155,7 +174,7 @@ export function useRufzRun(settings: RufzSettings, pool: string[]) {
               timestamp,
               totalPoints,
               callCount: current.callCount,
-              startCpm: current.startCpm,
+              startCpm: startCpmRef.current,
               maxCpm: Math.max(...attempts.map((a) => a.cpm)),
               finalCpm: prev.cpm,
               correct: attempts.filter((a) => a.score.correct).length,
@@ -166,9 +185,22 @@ export function useRufzRun(settings: RufzSettings, pool: string[]) {
         return;
       }
 
-      const cpm = current.fixedSpeed
-        ? prev.cpm
-        : nextSpeed(prev.cpm, score.errors, current.speedRule, prev.repeatUsed);
+      let cpm = prev.cpm;
+      if (!current.fixedSpeed) {
+        const next = nextSpeed(
+          prev.cpm,
+          current.speedRule,
+          {
+            errors: score.errors,
+            repeated: prev.repeatUsed,
+            elapsedSeconds,
+            length: sent.length,
+          },
+          rampRef.current,
+        );
+        cpm = next.cpm;
+        rampRef.current = next.ramp;
+      }
 
       commit({
         phase: 'sending',

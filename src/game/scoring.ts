@@ -104,20 +104,31 @@ export function countErrors(sent: string, typed: string): number {
 }
 
 /**
- * Speed adaptation. RufzXP moves up after a clean copy and down after a miss,
- * with the size of the drop scaling with how badly the call was missed.
+ * Speed adaptation.
  *
- * A clean copy that needed a repeat climbs at half rate: the operator did get
- * the call, but only on a second hearing, so the ramp should not run away the
- * way it does when every repeat is free.
+ * A staircase that hunts for the fastest speed the operator can actually hold,
+ * rather than the fastest they can survive. Three things drive it:
+ *
+ *   - Direction comes from the copy: clean goes up, errors go down.
+ *   - Size comes from confidence. A call copied quickly and cleanly is evidence
+ *     the speed is well under the operator's ceiling, so it takes a full step;
+ *     a clean copy that took a repeat, or that they laboured over, barely moves.
+ *   - The step narrows every time the direction changes. Early reversals mean
+ *     the ceiling is still being bracketed, so the jumps are large; by the tenth
+ *     the speed is circling the real limit and the jumps should be fine.
+ *
+ * Down-steps outweigh up-steps, which settles the ramp where the operator gets
+ * roughly two calls in three clean — at their edge, not comfortably inside it.
  */
 export interface SpeedRule {
   /** Fixed step in cpm, or a proportion of the current speed. */
   mode: 'fixed' | 'proportional';
   /** cpm when mode is 'fixed'. */
   stepCpm: number;
-  /** Fraction of current speed when mode is 'proportional'. */
+  /** Fraction of current speed before any reversal, when mode is 'proportional'. */
   stepFraction: number;
+  /** Fraction the step narrows to once the ceiling has been bracketed. */
+  minStepFraction: number;
   minCpm: number;
   maxCpm: number;
 }
@@ -129,30 +140,149 @@ export interface SpeedRule {
  */
 const MIN_STEP_CPM = 2;
 
+/** How much of the step remains after each change of direction. */
+const REVERSAL_DECAY = 0.8;
+
+/** Weight of a drop at a single error, and the extra weight at a total miss. */
+const DOWN_BASE = 0.5;
+const DOWN_SPAN = 0.5;
+
+/** A clean copy that needed a repeat still climbs, but only just. */
+const REPEAT_WEIGHT = 0.4;
+
+/** Floor on the climb after a clean copy the operator clearly laboured over. */
+const MIN_UP_WEIGHT = 0.15;
+
+/**
+ * Typing pace, relative to the operator's own recent pace, at which the climb
+ * stops shrinking. At the baseline the copy earns half a step; at half the
+ * baseline — answered almost instantly — it earns a full one.
+ */
+const EASE_SPAN = 1.5;
+
+/** Clean copies folded into the pace baseline before it stops being seeded. */
+const BASE_WINDOW = 8;
+
 export const DEFAULT_SPEED_RULE: SpeedRule = {
   mode: 'proportional',
   stepCpm: 20,
-  stepFraction: 0.06,
+  stepFraction: 0.1,
+  minStepFraction: 0.02,
   minCpm: 25,
   maxCpm: 735,
 };
 
+/**
+ * What the ramp remembers across a run. Held outside the speed itself because
+ * both the step size and the confidence weighting depend on what came before.
+ */
+export interface RampState {
+  /** Direction of the last move that actually changed the speed; 0 at the start. */
+  lastDir: -1 | 0 | 1;
+  /** Changes of direction so far. Each one narrows the step. */
+  reversals: number;
+  /** The operator's own typing pace on clean copies, in seconds per character. */
+  baseSecPerChar: number | null;
+  /** Clean copies folded into that baseline. */
+  baseSamples: number;
+}
+
+export const INITIAL_RAMP: RampState = {
+  lastDir: 0,
+  reversals: 0,
+  baseSecPerChar: null,
+  baseSamples: 0,
+};
+
+export interface RampInput {
+  errors: number;
+  repeated: boolean;
+  /** Seconds from end of transmission to Enter. */
+  elapsedSeconds: number;
+  /** Characters in the call, so the pace is comparable across lengths. */
+  length: number;
+}
+
+/**
+ * Signed size of the next move, as a fraction of a full step. Negative drops.
+ *
+ * The pace is judged against the operator's own baseline rather than a fixed
+ * number of seconds, so a deliberate typist is not held back for life; what
+ * matters is whether this call was harder work than their recent normal.
+ */
+function stepWeight(input: RampInput, pace: number, base: number | null): number {
+  if (input.errors > 0) {
+    const severity = Math.min(input.errors, MAX_ERRORS + 1) / (MAX_ERRORS + 1);
+    return -(DOWN_BASE + DOWN_SPAN * severity);
+  }
+
+  const ratio = base === null || base <= 0 ? 1 : pace / base;
+  const ease = clamp(EASE_SPAN - ratio, 0, 1);
+  return Math.max(MIN_UP_WEIGHT, ease) * (input.repeated ? REPEAT_WEIGHT : 1);
+}
+
+/**
+ * The baseline tracks recent pace rather than the whole run: as the speed
+ * climbs the copy genuinely gets slower, and the question is always whether
+ * this call was laboured compared with how the operator is going right now.
+ */
+function foldPace(ramp: RampState, pace: number): RampState {
+  const samples = ramp.baseSamples + 1;
+  const weight = 1 / Math.min(samples, BASE_WINDOW);
+  return {
+    ...ramp,
+    baseSamples: samples,
+    baseSecPerChar:
+      ramp.baseSecPerChar === null
+        ? pace
+        : ramp.baseSecPerChar + (pace - ramp.baseSecPerChar) * weight,
+  };
+}
+
 export function nextSpeed(
   currentCpm: number,
-  errors: number,
   rule: SpeedRule,
-  repeated = false,
-): number {
+  input: RampInput,
+  ramp: RampState = INITIAL_RAMP,
+): { cpm: number; ramp: RampState } {
+  // A flat step is meant to stay flat, so only the proportional mode narrows.
+  const fraction = Math.max(
+    rule.minStepFraction,
+    rule.stepFraction * Math.pow(REVERSAL_DECAY, ramp.reversals),
+  );
   const step =
     rule.mode === 'fixed'
       ? rule.stepCpm
-      : Math.max(MIN_STEP_CPM, Math.round(currentCpm * rule.stepFraction));
+      : Math.max(MIN_STEP_CPM, Math.round(currentCpm * fraction));
 
-  // Clean copy climbs one step, or half a step if it took a repeat; each error
-  // costs a step going down, repeat or not, since the points are already halved.
-  const up = repeated ? Math.max(1, Math.round(step / 2)) : step;
-  const delta = errors === 0 ? up : -step * Math.min(errors, MAX_ERRORS + 1);
-  return clamp(Math.round(currentCpm + delta), rule.minCpm, rule.maxCpm);
+  const pace = input.elapsedSeconds / Math.max(1, input.length);
+  const weight = stepWeight(input, pace, ramp.baseSecPerChar);
+
+  // Round away from zero: a small step times a small weight would otherwise
+  // stall the ramp entirely, leaving the operator parked at one speed.
+  const magnitude = Math.max(1, Math.abs(Math.round(step * weight)));
+  const cpm = clamp(
+    currentCpm + (weight < 0 ? -magnitude : magnitude),
+    rule.minCpm,
+    rule.maxCpm,
+  );
+
+  // A move that hit a limit changed nothing, so it is not a reversal.
+  const moved = cpm - currentCpm;
+  const dir: RampState['lastDir'] = moved === 0 ? ramp.lastDir : moved > 0 ? 1 : -1;
+  const reversed = ramp.lastDir !== 0 && dir !== ramp.lastDir;
+
+  const clean = input.errors === 0 && !input.repeated;
+  const next = clean ? foldPace(ramp, pace) : ramp;
+
+  return {
+    cpm,
+    ramp: {
+      ...next,
+      lastDir: dir,
+      reversals: reversed ? next.reversals + 1 : next.reversals,
+    },
+  };
 }
 
 export function clamp(value: number, min: number, max: number): number {
