@@ -168,7 +168,7 @@ export function useRufzRun(settings: RufzSettings, pool: string[]) {
 
       const cpm = current.fixedSpeed
         ? prev.cpm
-        : nextSpeed(prev.cpm, score.errors, current.speedRule);
+        : nextSpeed(prev.cpm, score.errors, current.speedRule, prev.repeatUsed);
 
       commit({
         phase: 'sending',

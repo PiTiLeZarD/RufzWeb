@@ -107,6 +107,26 @@ describe('speed adaptation', () => {
     expect(nextSpeed(735, 0, DEFAULT_SPEED_RULE)).toBe(735);
     expect(nextSpeed(25, 3, DEFAULT_SPEED_RULE)).toBe(25);
   });
+
+  it('climbs at half rate when the call needed a repeat', () => {
+    const clean = nextSpeed(200, 0, DEFAULT_SPEED_RULE) - 200;
+    const repeated = nextSpeed(200, 0, DEFAULT_SPEED_RULE, true) - 200;
+    expect(repeated).toBeGreaterThan(0);
+    expect(repeated).toBe(Math.round(clean / 2));
+  });
+
+  it('drops the full step even when the call needed a repeat', () => {
+    expect(nextSpeed(200, 1, DEFAULT_SPEED_RULE, true)).toBe(
+      nextSpeed(200, 1, DEFAULT_SPEED_RULE),
+    );
+  });
+
+  it('keeps the step proportional at beginner speeds', () => {
+    // A 50 cpm start used to jump a flat 5 cpm, a 10% climb per call.
+    const step = nextSpeed(50, 0, DEFAULT_SPEED_RULE) - 50;
+    expect(step).toBe(Math.round(50 * DEFAULT_SPEED_RULE.stepFraction));
+    expect(step).toBeLessThan(5);
+  });
 });
 
 describe('callsigns', () => {

@@ -106,6 +106,10 @@ export function countErrors(sent: string, typed: string): number {
 /**
  * Speed adaptation. RufzXP moves up after a clean copy and down after a miss,
  * with the size of the drop scaling with how badly the call was missed.
+ *
+ * A clean copy that needed a repeat climbs at half rate: the operator did get
+ * the call, but only on a second hearing, so the ramp should not run away the
+ * way it does when every repeat is free.
  */
 export interface SpeedRule {
   /** Fixed step in cpm, or a proportion of the current speed. */
@@ -118,6 +122,13 @@ export interface SpeedRule {
   maxCpm: number;
 }
 
+/**
+ * Smallest proportional step. A larger floor swamps the fraction at low speeds:
+ * a 5 cpm floor makes a 50 cpm start jump 10% per call, which is the steepest
+ * part of the whole ramp and lands exactly where a beginner starts.
+ */
+const MIN_STEP_CPM = 2;
+
 export const DEFAULT_SPEED_RULE: SpeedRule = {
   mode: 'proportional',
   stepCpm: 20,
@@ -126,14 +137,21 @@ export const DEFAULT_SPEED_RULE: SpeedRule = {
   maxCpm: 735,
 };
 
-export function nextSpeed(currentCpm: number, errors: number, rule: SpeedRule): number {
+export function nextSpeed(
+  currentCpm: number,
+  errors: number,
+  rule: SpeedRule,
+  repeated = false,
+): number {
   const step =
     rule.mode === 'fixed'
       ? rule.stepCpm
-      : Math.max(5, Math.round(currentCpm * rule.stepFraction));
+      : Math.max(MIN_STEP_CPM, Math.round(currentCpm * rule.stepFraction));
 
-  // Clean copy climbs one step; each error costs a step going down.
-  const delta = errors === 0 ? step : -step * Math.min(errors, MAX_ERRORS + 1);
+  // Clean copy climbs one step, or half a step if it took a repeat; each error
+  // costs a step going down, repeat or not, since the points are already halved.
+  const up = repeated ? Math.max(1, Math.round(step / 2)) : step;
+  const delta = errors === 0 ? up : -step * Math.min(errors, MAX_ERRORS + 1);
   return clamp(Math.round(currentCpm + delta), rule.minCpm, rule.maxCpm);
 }
 
